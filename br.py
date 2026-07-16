@@ -28,7 +28,7 @@ class BilloRani(QtWidgets.QWidget):
         super().__init__()
 
         # --- Paths & sizing ---
-        self.sprites_path = os.path.dirname(os.path.abspath(__file__))
+        self.sprites_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
         self.base_w, self.base_h = 18, 18
         self.scale = BilloRani.SCALE
         self.frame_w = self.base_w * self.scale
