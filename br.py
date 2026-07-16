@@ -144,15 +144,10 @@ class BilloRani(QtWidgets.QWidget):
         self.angry_messages = ["Grrr!", "I'm falling!", "Don't push me!", "Let me out!"]
         self.sleepy_messages = ["Zzz...", "Yawn...", "So sleepy..."]
         self.excited_messages = ["Yay!", "Jump!", "Woohoo!"]
-        self.saxena_quotes = [
-            "Saxena Ji, I love you!",
-            "When Saxena Ji enters the class, even teachers stand at attention.",
-            "Billo Rani secretly thinks Saxena Ji is cool.",
-            "Good morning beautiful.",
-            "Sunflowers for you.",
+        
         ]
         self.notepad_messages = [
-            "Dear Saxena Ji,\nYou are awesome.\n— Billo Rani",
+            "You are awesome.\n— Billo Rani",
             "Roses are red\nCode runs green\nOpen Notepad\nAnd live the dream",
             "Hehe, I opened Notepad for you!",
             "If you see this, smile.",
@@ -161,7 +156,7 @@ class BilloRani(QtWidgets.QWidget):
             "Tum hi ho... (Billo sings!)",
             "Tere liye dil...\n— Billo Rani",
         ]
-        self.search_queries = ["cute desktop pet", "Saxena Ji", "python pet widget", "funny gif"]
+        self.search_queries = ["cute desktop pet", "python pet widget", "funny gif"]
 
         print("Billo Rani — cleaned + mood colors + trapping integrated — ready!")
 
@@ -285,7 +280,7 @@ class BilloRani(QtWidgets.QWidget):
             "flying": "blue",
             "sleepy": "gray",
             "excited": "green",
-            "saxena": "purple",
+            "Me": "purple",
         }
         if not (force or random.random() < 0.4) and not text:
             return
@@ -408,14 +403,14 @@ class BilloRani(QtWidgets.QWidget):
 
     def action_compliment(self):
         self.show_random_message(force=True, text=random.choice([
-            "Saxena Ji, you are amazing.",
+            "You are amazing.",
             "You're doing great today!",
             "Keep shining, superstar!",
         ]), color="pink")
         self.mood = "happy"
 
     def action_lecture(self):
-        self.show_random_message(force=True, text=random.choice(self.saxena_quotes), color="purple")
+        self.show_random_message(force=True, text=random.choice(self.me_quotes), color="purple")
 
     def action_think_deeply(self):
         self.show_random_message(force=True, text=random.choice([
@@ -449,7 +444,7 @@ class BilloRani(QtWidgets.QWidget):
         self.pump_event(note_text=random.choice(self.notepad_messages))
 
     def action_send_love(self):
-        txt = "Dear Saxena Ji,\nYou are the best.\n— Billo Rani"
+        txt = "You are the best.\n— Billo Rani"
         self.pump_event(note_text=txt)
 
     def action_bollywood_serenade(self):
