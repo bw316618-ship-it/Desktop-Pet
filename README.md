@@ -1,83 +1,223 @@
-# Billo Rani 🐾
+# Billo Rani
 
-A tiny animated desktop pet for Windows (also runs on Linux/macOS with
-reduced features), built with Python and PyQt5. She wanders your screen,
-reacts to being dragged/dropped, gets "trapped" if you draw a selection
-box over her, and has a right-click menu full of extra tricks (dance,
-compliments, love notes via Notepad, Bollywood serenades, and more).
+A tiny animated desktop companion built with **Python** and **PyQt5**.
 
-This project was recovered from a long ChatGPT conversation (`br.py` went
-through many iterations) and reassembled into a clean, runnable single-file
-script — see [Provenance & known limitations](#provenance--known-limitations)
-below for details on that process.
+Billo Rani wanders around your desktop, flies, rolls, gets angry when you annoy her, opens Notepad to leave messages, and comes with a collection of interactive right-click actions inspired by desktop pets like Desktop Goose while keeping her own personality.
+
+---
 
 ## Features
 
-- Idle / run / fly / roll / jump / bump / drop / skid animations
-- Drag-and-drop physics with gravity, "hurt" blink on landing, and skid-stop
-- Get her "trapped" by dragging a selection rectangle over her
-- Right-click menu, organized into submenus:
-  - **Fun & Movement** — Dance Party, Self-Destruct, Mirror Mode
-  - **Think & Learn** — Compliment Me, Lecture Mode, Think Deeply, Search Something
-  - **Love & Letters** — Write Note, Send Love Letter, Bollywood Serenade
-  - **Moods & Tricks** — Annoy Her, Change Color
-  - **Utilities** — Open Chrome, Reset Mood, Exit
-- Mood-colored speech bubbles (happy/angry/flying/sleepy/excited)
+### Animations
+- Walking
+- Flying
+- Rolling
+- Jumping
+- Falling
+- Hurt
+- Skidding
+- Pump animation
+- Idle
+- Bump animation
 
-## Requirements
+### AI Behaviours
+- Random wandering
+- Rare flying
+- Random rolling
+- Mood system
+- Angry when disturbed
+- Dizzy after being dragged too long
+- Falls when clicked while flying
+- Random speech bubbles
+- Colored speech depending on mood
 
-- Python 3.8+
-- PyQt5
+### Interactive
+- Drag and throw
+- Right-click context menu
+- Open Chrome
+- Random compliments
+- Funny lectures
+- Love letters
+- Notepad messages
+- Dance mode
+- Search the web
+- Self-destruct animation
+- Mirror mode
+- Change colors
+- Annoy mode
+
+---
+
+## Screenshots
+
+_Add screenshots here._
+
+---
+
+## Installation
+
+Clone the repository.
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/YOUR_USERNAME/Billo-Rani.git
+cd Billo-Rani
 ```
 
-## Running
+Install dependencies.
+
+```bash
+pip install PyQt5
+```
+
+Run.
 
 ```bash
 python br.py
 ```
 
-Notepad-related features (Write Note, Send Love Letter, Bollywood Serenade)
-and window-focusing use `notepad.exe` and Win32 APIs, so they only fully
-work on **Windows**. On other platforms the script still runs — those
-actions will just fail quietly (errors are caught and printed to the
-console) — everything else (movement, dragging, menu, moods) works
-cross-platform.
+or
 
-### Sprites
+```bash
+py br.py
+```
 
-The script expects 18x18px PNG sprite frames next to `br.py` (scaled up
-4x at runtime). See [`assets/README.md`](assets/README.md) for the full
-list of expected filenames — the original art wasn't recoverable from the
-source conversation, so you'll need to supply your own. The script runs
-fine without them (it just won't have anything to draw).
+---
 
-## Provenance & known limitations
+## Requirements
 
-This repo was reconstructed from a 201-page "print to PDF" export of a
-ChatGPT conversation, which contained no embedded text layer — every page
-was a raster image. The code was recovered via OCR + manual review of each
-page image, using the **final, most-complete iteration** of the script
-(the version explicitly labeled "final: merged mood colors + trapping +
-cleaned" near the end of the conversation), since the chat contains many
-earlier draft rewrites of the same file.
+- Python 3.10+
+- PyQt5
+- Windows (currently tested)
 
-A few notes on that process:
+---
 
-- **One bug fixed on purpose:** in the final version, `self.falling` was
-  set by the mouse-release handler but `update_position()` never checked
-  it, so gravity/falling never actually ran after being dropped (an
-  earlier draft had this logic; it was dropped during a later merge).
-  That block has been restored and wired back in.
-- The script has been verified to **compile and run** (headless, with
-  placeholder sprites) without errors, but hasn't been tested with real
-  sprite art or on a real Windows desktop — please open an issue (or just
-  try it and fix forward) if something doesn't match your original intent.
-- A handful of cosmetic strings (emoji in messages, a couple of curly
-  quotes) were normalized to plain ASCII during transcription.
+## Project Structure
+
+```
+Billo-Rani/
+│
+├── br.py
+├── README.md
+│
+├── standl.png
+├── standr.png
+│
+├── runl1.png
+├── runl2.png
+├── runl3.png
+├── runr1.png
+├── runr2.png
+├── runr3.png
+│
+├── flyingl1.png
+├── flyingl2.png
+├── flyingl3.png
+├── flyingr1.png
+├── flyingr2.png
+├── flyingr3.png
+│
+├── jumpl.png
+├── jumpr.png
+│
+├── dropl.png
+├── dropr.png
+│
+├── bumpl.png
+├── bumpr.png
+│
+├── skidl.png
+├── skidr.png
+│
+├── roll1.png
+├── roll2.png
+├── roll3.png
+├── roll4.png
+│
+├── hurt.png
+├── hurt2.png
+│
+├── pumpl1.png
+├── pumpl2.png
+├── pumpl3.png
+├── pumpr1.png
+├── pumpr2.png
+├── pumpr3.png
+│
+└── LICENSE
+```
+
+---
+
+## Controls
+
+| Action | Result |
+|---------|--------|
+| Left Click | Jump / interact |
+| Drag | Pick Billo Rani up |
+| Hold for 3 seconds | She becomes dizzy and rolls |
+| Release | She falls and gets hurt |
+| Right Click | Open interaction menu |
+
+---
+
+## Inspiration
+
+This project was inspired by:
+
+- Desktop Goose
+- Shimeji
+- Clippy
+- Desktop pets from early Windows customization communities
+
+while creating an original character with her own behaviors and personality.
+
+---
+
+## Roadmap
+
+- [ ] Multiple pets
+- [ ] Save preferences
+- [ ] Weather reactions
+- [ ] Time-based routines
+- [ ] Music reactions
+- [ ] Better window interaction
+- [ ] Sleeping system
+- [ ] Inventory/items
+- [ ] Seasonal events
+- [ ] Plugin system
+- [ ] Custom dialogue packs
+
+---
+
+## Known Issues
+
+- Designed primarily for Windows.
+- Some antivirus software may briefly flag programs that simulate mouse or window interactions.
+- Multi-monitor support can still be improved.
+
+---
+
+## Contributing
+
+Issues, feature requests, and pull requests are welcome.
+
+If you find a bug, please open an issue with:
+
+- Python version
+- Operating System
+- Screenshot or recording
+- Error message (if any)
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+This project is licensed under the MIT License.
+
+---
+
+## Acknowledgements
+
+Desktop pet genre inspired by countless community projects over the years.
+
+Special thanks to everyone who has kept tiny desktop companions alive.
