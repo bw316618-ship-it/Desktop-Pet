@@ -144,7 +144,13 @@ class BilloRani(QtWidgets.QWidget):
         self.angry_messages = ["Grrr!", "I'm falling!", "Don't push me!", "Let me out!"]
         self.sleepy_messages = ["Zzz...", "Yawn...", "So sleepy..."]
         self.excited_messages = ["Yay!", "Jump!", "Woohoo!"]
-        
+        self.me_quotes = [
+            "I love you!",
+            "When you enter the class, even teachers stand at attention.",
+            "Billo Rani secretly thinks you are cool.",
+            "Good morning beautiful.",
+            "Sunflowers for you.",
+        ]
         self.notepad_messages = [
             "You are awesome.\n— Billo Rani",
             "Roses are red\nCode runs green\nOpen Notepad\nAnd live the dream",
