@@ -1,11 +1,23 @@
-# br.py — Billo Rani (final: merged mood colors + trapping + cleaned)
-import sys
+"""Billo Rani — an animated desktop pet built with PyQt5.
+
+She wanders your screen, flies, rolls, gets dizzy or "trapped", falls with
+gravity when dropped, and has a right-click menu of extra tricks (dance,
+compliments, love notes via Notepad, Bollywood serenades, and more).
+
+Run directly: `python br.py`. Sprite frames are loaded from `assets/`
+next to this file (or from the PyInstaller bundle dir when frozen into
+an exe) — see assets/README.md for the expected filenames.
+"""
+import ctypes
+import math
 import os
 import random
-import math
 import subprocess
+import sys
+import tempfile
 import time
-import ctypes
+from typing import Optional
+
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 IS_WINDOWS = sys.platform.startswith("win")
@@ -22,25 +34,80 @@ if IS_WINDOWS:
 
 
 class BilloRani(QtWidgets.QWidget):
-    SCALE = 4  # consistent scale (you chose 4)
+    """The desktop pet widget: sprite rendering, physics, moods, and menu."""
+
+    # --- Sprite sizing ---
+    SCALE = 4  # sprite frames are drawn at BASE_SIZE and scaled up this much
+    BASE_SIZE = 18
+
+    # --- Movement / physics tuning ---
+    MAX_SPEED = 3.0
+    STEER_SMOOTHING = 0.2          # how quickly velocity chases the target
+    FLY_WAVE_AMPLITUDE = 2
+    FLY_WAVE_SPEED = 0.12
+    EDGE_BOUNCE_DAMPING = 0.6
+    CEILING_BOUNCE_DAMPING = 0.5
+    SKID_VELOCITY_DROP = 2.5       # vx delta that triggers a skid stop
+    SKID_MIN_PREV_SPEED = 2.5
+    BUMP_MIN_PREV_SPEED = 2
+    GRAVITY = 0.9
+    AIR_DRAG = 0.98
+    JUMP_IMPULSE = 6
+    FLY_KNOCKDOWN_VY = 5
+    DROP_START_VY = 4.0
+    LANDING_BOUNCE_VY = -6
+
+    # --- Timer intervals (ms) ---
+    ANIM_INTERVAL_MS = 110
+    MOVE_INTERVAL_MS = 30
+    BEHAVIOR_INTERVAL_MS = 4000
+    MESSAGE_INTERVAL_MS = 6000
+    MESSAGE_DISPLAY_MS = 4000
+    DRAG_HOLD_DIZZY_MS = 3000      # how long you must hold-drag to trigger dizzy roll
+    DIZZY_ROLL_MS = 2000
+    ANNOY_ROLL_MS = 1200
+    SELF_DESTRUCT_ROLL_MS = 800
+    RESPAWN_DELAY_MS = 2000
+    SKID_DURATION_MS = 600
+    TINT_DURATION_MS = 5000
+    MIRROR_DURATION_MS = 10000
+    HURT_BLINK_DURATION_MS = 1800
+    HURT_BLINK_INTERVAL_MS = 300
+    DANCE_DURATION_S = 5.0
+    DANCE_STEP_MS = 100
+
+    # --- Random-event chances (per behavior tick) ---
+    PUMP_EVENT_CHANCE = 0.05
+    FLY_CHANCE = 0.1
+    IDLE_MESSAGE_CHANCE = 0.4
+
+    # Animation key -> sprite filename template(s). A single "{side}" frame
+    # (no number) means the animation has one static pose; a range means an
+    # animated cycle. This is the single source of truth for which sprite
+    # files the pet expects, used both to preload frames and to build the
+    # per-state animation lists.
+    ANIMATION_DEFS = {
+        "idle": ("stand{side}", None),
+        "run": ("run{side}", (1, 3)),
+        "fly": ("flying{side}", (1, 3)),
+        "pump": ("pump{side}", (1, 3)),
+        "roll": ("roll", (1, 4)),          # not side-specific
+        "jump": ("jump{side}", None),
+        "bump": ("bump{side}", None),
+        "drop": ("drop{side}", None),
+        "skid": ("skid{side}", None),
+    }
 
     def __init__(self):
         super().__init__()
 
         # --- Paths & sizing ---
-        if getattr(sys, "frozen", False):
-            # Running as a PyInstaller-built exe: bundled data files land in
-            # sys._MEIPASS (a temp extraction dir), not next to the exe.
-            self.sprites_path = os.path.join(sys._MEIPASS, "assets")
-        else:
-            self.sprites_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-        self.base_w, self.base_h = 18, 18
-        self.scale = BilloRani.SCALE
-        self.frame_w = self.base_w * self.scale
-        self.frame_h = self.base_h * self.scale
+        self.sprites_path = self._resolve_sprites_path()
+        self.frame_w = self.BASE_SIZE * self.SCALE
+        self.frame_h = self.BASE_SIZE * self.SCALE
 
         # --- Frames dict (load individual images) ---
-        self.frames = {}
+        self.frames: dict = {}
         self._load_all_frames()
 
         # --- Anim map (lists of QPixmap) ---
@@ -52,22 +119,39 @@ class BilloRani(QtWidgets.QWidget):
 
         # Movement/physics
         self.vx, self.vy = 0.0, 0.0
-        self.max_speed = 3.0
         self.is_flying = False
         self.is_rolling = False
         self.falling = False
         self.fly_angle = 0.0
-        self.target_x, self.target_y = None, None
+        self.target_x: Optional[int] = None
+        self.target_y: Optional[int] = None
 
         # Dragging/trap
         self.dragging = False
         self.drag_offset = QtCore.QPoint(0, 0)
-        self.trap_start = None  # used to detect selection-rectangle trapping
+        self.trap_start: Optional[QtCore.QPoint] = None  # selection-rectangle trapping
 
-        # Mood
-        self.mood = "happy"  # happy, angry, trapped, flying, sleepy, excited
+        # Mood: one of happy, angry, trapped, flying, sleepy, excited
+        self.mood = "happy"
 
-        # --- UI setup ---
+        self._setup_window()
+        self._setup_timers()
+        self._setup_text_pools()
+
+        print("Billo Rani — cleaned + mood colors + trapping integrated — ready!")
+
+    # -------------------------
+    # Setup helpers
+    # -------------------------
+    @staticmethod
+    def _resolve_sprites_path() -> str:
+        if getattr(sys, "frozen", False):
+            # Running as a PyInstaller-built exe: bundled data files land in
+            # sys._MEIPASS (a temp extraction dir), not next to the exe.
+            return os.path.join(sys._MEIPASS, "assets")
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+    def _setup_window(self):
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint |
             QtCore.Qt.WindowStaysOnTopHint |
@@ -80,7 +164,7 @@ class BilloRani(QtWidgets.QWidget):
         self.label.setGeometry(0, 0, self.frame_w, self.frame_h)
         self.label.setAttribute(QtCore.Qt.WA_TranslucentBackground)
 
-        # message label
+        # message (speech bubble) label
         self.msg_label = QtWidgets.QLabel()
         self.msg_label.setWindowFlags(
             QtCore.Qt.FramelessWindowHint |
@@ -91,29 +175,29 @@ class BilloRani(QtWidgets.QWidget):
         self.msg_label.setAlignment(QtCore.Qt.AlignCenter)
         self.msg_label.hide()
 
-        # screen geometry (robust)
+        # screen geometry (robust fallback if no primary screen is reported)
         screen = QtWidgets.QApplication.primaryScreen()
         self.screen = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 800, 600)
         self.resize(self.frame_w, self.frame_h)
         self.move(self.screen.width() // 2, self.screen.height() // 2)
         self.show()
 
-        # --- Timers ---
+    def _setup_timers(self):
         self.anim_timer = QtCore.QTimer(self)
         self.anim_timer.timeout.connect(self.update_frame)
-        self.anim_timer.start(110)
+        self.anim_timer.start(self.ANIM_INTERVAL_MS)
 
         self.move_timer = QtCore.QTimer(self)
         self.move_timer.timeout.connect(self.update_position)
-        self.move_timer.start(30)
+        self.move_timer.start(self.MOVE_INTERVAL_MS)
 
         self.behavior_timer = QtCore.QTimer(self)
         self.behavior_timer.timeout.connect(self.choose_target)
-        self.behavior_timer.start(4000)
+        self.behavior_timer.start(self.BEHAVIOR_INTERVAL_MS)
 
         self.message_timer = QtCore.QTimer(self)
         self.message_timer.timeout.connect(lambda: self.show_random_message())
-        self.message_timer.start(6000)
+        self.message_timer.start(self.MESSAGE_INTERVAL_MS)
 
         # roll/dizzy
         self.roll_timer = QtCore.QTimer(self)
@@ -137,13 +221,13 @@ class BilloRani(QtWidgets.QWidget):
         self.skid_timer.timeout.connect(self.end_skid)
 
         # tint/mirror
-        self.tint = None
+        self.tint: Optional[str] = None
         self.tint_timer = QtCore.QTimer(self)
         self.tint_timer.setSingleShot(True)
         self.tint_timer.timeout.connect(self.clear_tint)
         self.mirrored = False
 
-        # --- Text pools ---
+    def _setup_text_pools(self):
         self.messages = ["Whee!", "Zoom!", "Walking time!", "Watch out!",
                           "Hehe!", "Here I go!", "Hello there!", "Clicky!"]
         self.angry_messages = ["Grrr!", "I'm falling!", "Don't push me!", "Let me out!"]
@@ -168,12 +252,21 @@ class BilloRani(QtWidgets.QWidget):
         ]
         self.search_queries = ["cute desktop pet", "Saxena Ji", "python pet widget", "funny gif"]
 
-        print("Billo Rani — cleaned + mood colors + trapping integrated — ready!")
+        # mood -> (message pool, speech-bubble color). Used by show_random_message.
+        self.mood_pools = {
+            "angry": (self.angry_messages, "red"),
+            "trapped": (self.angry_messages, "red"),
+            "flying": (self.messages, "blue"),
+            "sleepy": (self.sleepy_messages, "gray"),
+            "excited": (self.excited_messages, "green"),
+            "happy": (self.messages, "yellow"),
+        }
 
     # -------------------------
     # Frame loading utilities
     # -------------------------
-    def _load_pm(self, fname):
+    def _load_pm(self, fname: str) -> Optional[QtGui.QPixmap]:
+        """Load one sprite PNG, center it on a frame_w x frame_h transparent canvas."""
         path = os.path.join(self.sprites_path, fname)
         if not os.path.exists(path):
             print(f"(warn) missing {fname}")
@@ -192,50 +285,48 @@ class BilloRani(QtWidgets.QWidget):
         painter.end()
         return canvas
 
-    def _load_all_frames(self):
-        expected = [
-            "bumpl.png", "bumpr.png", "dropl.png", "dropr.png",
-            "flyingl1.png", "flyingl2.png", "flyingl3.png",
-            "flyingr1.png", "flyingr2.png", "flyingr3.png",
-            "hurt.png", "hurt2.png", "jumpl.png", "jumpr.png",
-            "pumpl1.png", "pumpl2.png", "pumpl3.png",
-            "pumpr1.png", "pumpr2.png", "pumpr3.png",
-            "roll1.png", "roll2.png", "roll3.png", "roll4.png",
-            "runl1.png", "runl2.png", "runl3.png",
-            "runr1.png", "runr2.png", "runr3.png",
-            "skidl.png", "skidr.png",
-            "standl.png", "standr.png",
-        ]
-        for n in expected:
-            self.frames[n] = self._load_pm(n)
+    def _frame_names_for(self, template: str, frame_range: Optional[tuple], side: str = "") -> list:
+        """Expand an ANIMATION_DEFS entry into concrete filenames, e.g.
+        ("run{side}", (1, 3)) + side="l" -> ["runl1.png", "runl2.png", "runl3.png"]."""
+        name = template.format(side=side)
+        if frame_range is None:
+            return [f"{name}.png"]
+        lo, hi = frame_range
+        return [f"{name}{i}.png" for i in range(lo, hi + 1)]
 
-    def _build_animation_map(self):
-        A = {}
-        A["idle_left"] = [self.frames.get("standl.png")] if self.frames.get("standl.png") else []
-        A["idle_right"] = [self.frames.get("standr.png")] if self.frames.get("standr.png") else []
-        A["run_left"] = [self.frames.get(f"runl{i}.png") for i in (1, 2, 3) if self.frames.get(f"runl{i}.png")]
-        A["run_right"] = [self.frames.get(f"runr{i}.png") for i in (1, 2, 3) if self.frames.get(f"runr{i}.png")]
-        A["fly_left"] = [self.frames.get(f"flyingl{i}.png") for i in (1, 2, 3) if self.frames.get(f"flyingl{i}.png")]
-        A["fly_right"] = [self.frames.get(f"flyingr{i}.png") for i in (1, 2, 3) if self.frames.get(f"flyingr{i}.png")]
-        A["pump_left"] = [self.frames.get(f"pumpl{i}.png") for i in (1, 2, 3) if self.frames.get(f"pumpl{i}.png")]
-        A["pump_right"] = [self.frames.get(f"pumpr{i}.png") for i in (1, 2, 3) if self.frames.get(f"pumpr{i}.png")]
-        A["roll_left"] = [self.frames.get(f"roll{i}.png") for i in (1, 2, 3, 4) if self.frames.get(f"roll{i}.png")]
-        A["roll_right"] = A["roll_left"]
-        A["jump_left"] = [self.frames.get("jumpl.png")] if self.frames.get("jumpl.png") else []
-        A["jump_right"] = [self.frames.get("jumpr.png")] if self.frames.get("jumpr.png") else []
-        A["bump_left"] = [self.frames.get("bumpl.png")] if self.frames.get("bumpl.png") else []
-        A["bump_right"] = [self.frames.get("bumpr.png")] if self.frames.get("bumpr.png") else []
-        A["drop_left"] = [self.frames.get("dropl.png")] if self.frames.get("dropl.png") else []
-        A["drop_right"] = [self.frames.get("dropr.png")] if self.frames.get("dropr.png") else []
-        A["skid_left"] = [self.frames.get("skidl.png")] if self.frames.get("skidl.png") else []
-        A["skid_right"] = [self.frames.get("skidr.png")] if self.frames.get("skidr.png") else []
-        A["hurt_frames"] = [f for f in (self.frames.get("hurt.png"), self.frames.get("hurt2.png")) if f]
-        return A
+    def _load_all_frames(self):
+        """Preload every sprite file referenced by ANIMATION_DEFS plus hurt frames."""
+        expected = []
+        for template, frame_range in self.ANIMATION_DEFS.values():
+            sides = ("l", "r") if "{side}" in template else ("",)
+            for side in sides:
+                expected.extend(self._frame_names_for(template, frame_range, side))
+        expected += ["hurt.png", "hurt2.png"]
+
+        for name in expected:
+            self.frames[name] = self._load_pm(name)
+
+    def _build_animation_map(self) -> dict:
+        """Build state-key -> [QPixmap, ...] from the frames already loaded."""
+        anim = {}
+        for key, (template, frame_range) in self.ANIMATION_DEFS.items():
+            if "{side}" in template:
+                for side, suffix in (("l", "left"), ("r", "right")):
+                    names = self._frame_names_for(template, frame_range, side)
+                    anim[f"{key}_{suffix}"] = [self.frames[n] for n in names if self.frames.get(n)]
+            else:
+                # not side-specific (currently only "roll") — same frames both ways
+                names = self._frame_names_for(template, frame_range)
+                frames = [self.frames[n] for n in names if self.frames.get(n)]
+                anim[f"{key}_left"] = frames
+                anim[f"{key}_right"] = frames
+        anim["hurt_frames"] = [f for f in (self.frames.get("hurt.png"), self.frames.get("hurt2.png")) if f]
+        return anim
 
     # -------------------------
     # Drawing & tint helpers
     # -------------------------
-    def _apply_tint(self, pixmap, color):
+    def _apply_tint(self, pixmap: Optional[QtGui.QPixmap], color: str) -> Optional[QtGui.QPixmap]:
         if pixmap is None:
             return pixmap
         img = pixmap.toImage().convertToFormat(QtGui.QImage.Format_ARGB32)
@@ -248,12 +339,20 @@ class BilloRani(QtWidgets.QWidget):
         painter.end()
         return canvas
 
-    def set_tint(self, color, duration_ms=3000):
+    def set_tint(self, color: str, duration_ms: int = TINT_DURATION_MS):
         self.tint = color
         self.tint_timer.start(duration_ms)
 
     def clear_tint(self):
         self.tint = None
+
+    def _current_pixmap(self, pix: QtGui.QPixmap) -> QtGui.QPixmap:
+        """Apply mirror/tint transforms consistently everywhere a frame is drawn."""
+        if self.mirrored:
+            pix = pix.transformed(QtGui.QTransform().scale(-1, 1))
+        if self.tint:
+            pix = self._apply_tint(pix, self.tint)
+        return pix
 
     # -------------------------
     # Frame update (animation)
@@ -266,53 +365,27 @@ class BilloRani(QtWidgets.QWidget):
         frames = [f for f in frames if isinstance(f, QtGui.QPixmap)]
         if not frames:
             return
-        if len(frames) == 1:
-            pix = frames[0]
-        else:
-            pix = frames[self.frame_index % len(frames)]
-        if self.mirrored:
-            pix = pix.transformed(QtGui.QTransform().scale(-1, 1))
-        if self.tint:
-            pix = self._apply_tint(pix, self.tint)
-        self.label.setPixmap(pix)
+        pix = frames[0] if len(frames) == 1 else frames[self.frame_index % len(frames)]
+        self.label.setPixmap(self._current_pixmap(pix))
         self.label.adjustSize()
         self.frame_index += 1
 
     # -------------------------
     # Message display with mood-color map
     # -------------------------
-    def show_random_message(self, force=False, angry=False, text=None, color=None):
-        # mood -> color mapping (kept from your smaller code)
-        mood_colors = {
-            "happy": "yellow",
-            "angry": "red",
-            "trapped": "red",
-            "flying": "blue",
-            "sleepy": "gray",
-            "excited": "green",
-            "saxena": "purple",
-        }
-        if not (force or random.random() < 0.4) and not text:
+    def show_random_message(self, force: bool = False, angry: bool = False,
+                             text: Optional[str] = None, color: Optional[str] = None):
+        if not (force or random.random() < self.IDLE_MESSAGE_CHANCE) and not text:
             return
+
         if text:
-            msg = text
-            col = color or "black"
+            msg, col = text, (color or "black")
+        elif angry or self.mood in ("angry", "trapped"):
+            pool, col = self.mood_pools["angry"]
+            msg = random.choice(pool)
         else:
-            if angry or self.mood in ["angry", "trapped"]:
-                msg = random.choice(self.angry_messages)
-                col = "red"
-            elif self.mood == "flying":
-                msg = random.choice(self.messages)
-                col = "blue"
-            elif self.mood == "sleepy":
-                msg = random.choice(self.sleepy_messages)
-                col = "gray"
-            elif self.mood == "excited":
-                msg = random.choice(self.excited_messages)
-                col = "green"
-            else:
-                msg = random.choice(self.messages)
-                col = "yellow"
+            pool, col = self.mood_pools.get(self.mood, self.mood_pools["happy"])
+            msg = random.choice(pool)
 
         self.msg_label.setText(msg)
         self.msg_label.setStyleSheet(
@@ -326,7 +399,7 @@ class BilloRani(QtWidgets.QWidget):
         )
         self.msg_label.show()
         self.msg_label.raise_()
-        QtCore.QTimer.singleShot(4000, self.msg_label.hide)
+        QtCore.QTimer.singleShot(self.MESSAGE_DISPLAY_MS, self.msg_label.hide)
 
     # -------------------------
     # Right-click menu (organized)
@@ -334,44 +407,38 @@ class BilloRani(QtWidgets.QWidget):
     def contextMenuEvent(self, event):
         menu = QtWidgets.QMenu(self)
 
-        # Fun & Movement
-        fun = menu.addMenu("Fun & Movement")
-        fun.addAction("Dance Party", lambda: self.action_dance())
-        fun.addAction("Self-Destruct", lambda: self.action_self_destruct())
-        fun.addAction("Mirror Mode", lambda: self.action_mirror_mode())
+        fun = menu.addMenu("Fun && Movement")
+        fun.addAction("Dance Party", self.action_dance)
+        fun.addAction("Self-Destruct", self.action_self_destruct)
+        fun.addAction("Mirror Mode", self.action_mirror_mode)
 
-        # Think & Learn
-        learn = menu.addMenu("Think & Learn")
-        learn.addAction("Compliment Me", lambda: self.action_compliment())
-        learn.addAction("Lecture Mode", lambda: self.action_lecture())
-        learn.addAction("Think Deeply", lambda: self.action_think_deeply())
-        learn.addAction("Search Something", lambda: self.action_search())
+        learn = menu.addMenu("Think && Learn")
+        learn.addAction("Compliment Me", self.action_compliment)
+        learn.addAction("Lecture Mode", self.action_lecture)
+        learn.addAction("Think Deeply", self.action_think_deeply)
+        learn.addAction("Search Something", self.action_search)
 
-        # Love & Letters
-        love = menu.addMenu("Love & Letters")
-        love.addAction("Write Note", lambda: self.action_write_note())
-        love.addAction("Send Love Letter", lambda: self.action_send_love())
-        love.addAction("Bollywood Serenade", lambda: self.action_bollywood_serenade())
+        love = menu.addMenu("Love && Letters")
+        love.addAction("Write Note", self.action_write_note)
+        love.addAction("Send Love Letter", self.action_send_love)
+        love.addAction("Bollywood Serenade", self.action_bollywood_serenade)
 
-        # Moods & Tricks
-        tricks = menu.addMenu("Moods & Tricks")
-        tricks.addAction("Annoy Her", lambda: self.action_annoy())
-        tricks.addAction("Change Color", lambda: self.action_change_color())
+        tricks = menu.addMenu("Moods && Tricks")
+        tricks.addAction("Annoy Her", self.action_annoy)
+        tricks.addAction("Change Color", self.action_change_color)
 
-        # Utilities
         util = menu.addMenu("Utilities")
-        util.addAction("Open Chrome", lambda: self.open_chrome())
-        util.addAction("Reset Mood", lambda: self.reset_mood())
-        util.addAction("Exit", lambda: QtWidgets.qApp.quit())
+        util.addAction("Open Chrome", self.open_chrome)
+        util.addAction("Reset Mood", self.reset_mood)
+        util.addAction("Exit", QtWidgets.QApplication.instance().quit)
 
         menu.exec_(event.globalPos())
 
     # -------------------------
-    # Actions (kept / cleaned)
+    # Actions
     # -------------------------
     def action_dance(self):
-        duration_s = 5.0
-        end = time.time() + duration_s
+        end = time.time() + self.DANCE_DURATION_S
         self.mood = "excited"
         orig_state = self.state
 
@@ -386,15 +453,15 @@ class BilloRani(QtWidgets.QWidget):
 
         self.dance_timer = QtCore.QTimer(self)
         self.dance_timer.timeout.connect(step)
-        self.dance_timer.start(100)
+        self.dance_timer.start(self.DANCE_STEP_MS)
 
     def action_self_destruct(self):
         self.state = "roll_right" if random.random() < 0.5 else "roll_left"
         self.is_rolling = True
-        self.roll_timer.start(800)
+        self.roll_timer.start(self.SELF_DESTRUCT_ROLL_MS)
         QtCore.QTimer.singleShot(
-            800,
-            lambda: (self.hide(), QtCore.QTimer.singleShot(2000, self._respawn_self))
+            self.SELF_DESTRUCT_ROLL_MS,
+            lambda: (self.hide(), QtCore.QTimer.singleShot(self.RESPAWN_DELAY_MS, self._respawn_self))
         )
 
     def _respawn_self(self):
@@ -409,7 +476,7 @@ class BilloRani(QtWidgets.QWidget):
 
     def action_mirror_mode(self):
         self.mirrored = True
-        QtCore.QTimer.singleShot(10000, lambda: setattr(self, "mirrored", False))
+        QtCore.QTimer.singleShot(self.MIRROR_DURATION_MS, lambda: setattr(self, "mirrored", False))
 
     def action_compliment(self):
         self.show_random_message(force=True, text=random.choice([
@@ -429,49 +496,50 @@ class BilloRani(QtWidgets.QWidget):
             "If a sprite falls in the forest...",
         ]), color="navy")
 
-    def action_search(self):
-        query = random.choice(self.search_queries)
+    def _launch_chrome(self, url: Optional[str] = None):
+        """Best-effort launch of Chrome, optionally pointed at a search URL."""
         try:
             if IS_WINDOWS:
-                subprocess.Popen(["start", "chrome", f"https://www.google.com/search?q={query}"], shell=True)
+                args = ["start", "chrome"] + ([url] if url else [])
+                subprocess.Popen(args, shell=True)
             else:
-                subprocess.Popen(["google-chrome", f"https://www.google.com/search?q={query}"])
-            self.show_random_message(force=True, text=f"Searching: {query}", color="blue")
-        except Exception as e:
-            print("search open failed:", e)
-
-    def open_chrome(self):
-        try:
-            if IS_WINDOWS:
-                subprocess.Popen(["start", "chrome"], shell=True)
-            else:
-                subprocess.Popen(["google-chrome"])
-            self.show_random_message(force=True)
+                args = ["google-chrome"] + ([url] if url else [])
+                subprocess.Popen(args)
+            return True
         except Exception as e:
             print("open chrome fail:", e)
+            return False
+
+    def action_search(self):
+        query = random.choice(self.search_queries)
+        url = f"https://www.google.com/search?q={query}"
+        if self._launch_chrome(url):
+            self.show_random_message(force=True, text=f"Searching: {query}", color="blue")
+
+    def open_chrome(self):
+        if self._launch_chrome():
+            self.show_random_message(force=True)
 
     def action_write_note(self):
         self.pump_event(note_text=random.choice(self.notepad_messages))
 
     def action_send_love(self):
-        txt = "Dear Saxena Ji,\nYou are the best.\n— Billo Rani"
-        self.pump_event(note_text=txt)
+        self.pump_event(note_text="Dear Saxena Ji,\nYou are the best.\n— Billo Rani")
 
     def action_bollywood_serenade(self):
-        txt = random.choice(self.bollywood_serenade_texts)
-        self.pump_event(note_text=txt)
+        self.pump_event(note_text=random.choice(self.bollywood_serenade_texts))
         self.show_random_message(force=True, text="*romantic chirp*", color="magenta")
 
     def action_annoy(self):
         self.mood = "angry"
         self.state = "roll_left" if random.random() < 0.5 else "roll_right"
         self.is_rolling = True
-        self.roll_timer.start(1200)
+        self.roll_timer.start(self.ANNOY_ROLL_MS)
         self.show_random_message(force=True, text="Stop it!", color="red")
 
     def action_change_color(self):
         color = random.choice(["#ff9999", "#99ff99", "#9999ff", "#ffd699", "#d699ff"])
-        self.set_tint(color, duration_ms=5000)
+        self.set_tint(color, duration_ms=self.TINT_DURATION_MS)
         self.show_random_message(force=True, text="Sparkle!", color="black")
 
     def reset_mood(self):
@@ -481,7 +549,7 @@ class BilloRani(QtWidgets.QWidget):
     # -------------------------
     # Pump / Notepad event
     # -------------------------
-    def pump_event(self, note_text=None, show_line=None):
+    def pump_event(self, note_text: Optional[str] = None, show_line: Optional[str] = None):
         # don't interrupt falling/rolling/dragging
         if self.falling or self.is_rolling or self.dragging:
             return
@@ -494,7 +562,7 @@ class BilloRani(QtWidgets.QWidget):
             self.show_random_message(force=True)
 
         txt = note_text if note_text else random.choice(self.notepad_messages)
-        tmp = os.path.join(os.getenv("TEMP", "."), f"billo_note_{random.randint(1000, 9999)}.txt")
+        tmp = os.path.join(tempfile.gettempdir(), f"billo_note_{random.randint(1000, 9999)}.txt")
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(txt)
@@ -504,7 +572,7 @@ class BilloRani(QtWidgets.QWidget):
         except Exception as e:
             print("Notepad open error:", e)
 
-    def _bring_notepad_to_front(self, filepath):
+    def _bring_notepad_to_front(self, filepath: str):
         if not IS_WINDOWS:
             return
         basename = os.path.basename(filepath)
@@ -520,8 +588,7 @@ class BilloRani(QtWidgets.QWidget):
                     return True
                 buf = ctypes.create_unicode_buffer(length + 1)
                 GetWindowText(hwnd, buf, length + 1)
-                title = buf.value
-                if basename in title:
+                if basename in buf.value:
                     nonlocal found
                     found = hwnd
                     return False
@@ -543,7 +610,7 @@ class BilloRani(QtWidgets.QWidget):
         self.is_rolling = True
         self.mood = "angry"
         self.state = "roll_right" if random.random() < 0.5 else "roll_left"
-        self.roll_timer.start(2000)
+        self.roll_timer.start(self.DIZZY_ROLL_MS)
         self.show_random_message(force=True, text="Dizzy!", color="red")
 
     def end_roll(self):
@@ -553,17 +620,18 @@ class BilloRani(QtWidgets.QWidget):
         if self.mood == "angry":
             self.mood = "happy"
 
-    def start_skid(self, right=True):
+    def start_skid(self, right: bool = True):
         self.state = "skid_right" if right else "skid_left"
         self.frame_index = 0
-        self.skid_timer.start(600)
+        self.skid_timer.start(self.SKID_DURATION_MS)
 
     def end_skid(self):
         self.state = "idle_right" if self.state.endswith("right") else "idle_left"
         self.frame_index = 0
 
-    # Hurt blink: freezes movement until finished
-    def _start_hurt_blink(self, duration_ms=1800, interval_ms=300):
+    def _start_hurt_blink(self, duration_ms: int = HURT_BLINK_DURATION_MS,
+                           interval_ms: int = HURT_BLINK_INTERVAL_MS):
+        """Freezes movement and blinks between hurt frames until finished."""
         hurt = self.anim.get("hurt_frames", [])
         if not hurt:
             return
@@ -579,11 +647,7 @@ class BilloRani(QtWidgets.QWidget):
             return
         self.hurt_blink_state = not self.hurt_blink_state
         pix = hurt[1] if self.hurt_blink_state and len(hurt) > 1 else hurt[0]
-        if self.mirrored:
-            pix = pix.transformed(QtGui.QTransform().scale(-1, 1))
-        if self.tint:
-            pix = self._apply_tint(pix, self.tint)
-        self.label.setPixmap(pix)
+        self.label.setPixmap(self._current_pixmap(pix))
         self.label.adjustSize()
         self.hurt_blink_count -= 1
         if self.hurt_blink_count <= 0:
@@ -596,11 +660,11 @@ class BilloRani(QtWidgets.QWidget):
     # choose target (wandering + occasional pump)
     # -------------------------
     def choose_target(self):
-        if random.random() < 0.05:
+        if random.random() < self.PUMP_EVENT_CHANCE:
             self.pump_event()
             return
         self.target_x = random.randint(0, max(0, self.screen.width() - self.width()))
-        if random.random() < 0.1:
+        if random.random() < self.FLY_CHANCE:
             self.target_y = random.randint(0, max(0, self.screen.height() - self.height()))
             self.is_flying = True
             self.mood = "flying"
@@ -626,7 +690,6 @@ class BilloRani(QtWidgets.QWidget):
 
         # If trapped (selection rectangle) -> freeze movement and stay angry/trapped
         if self.mood == "trapped":
-            # ensure velocity zeroed so she doesn't drift
             self.vx = 0.0
             self.vy = 0.0
             return
@@ -642,31 +705,27 @@ class BilloRani(QtWidgets.QWidget):
             if rect.intersects(self.geometry()):
                 if self.mood != "trapped":
                     self.mood = "trapped"
-                    # show angry/trapped message in red
                     self.show_random_message(force=True, angry=True)
-                # freeze movement handled above by early return on mood == "trapped"
-                return
-            else:
-                # if no longer intersecting, clear trap mood
-                if self.mood == "trapped":
-                    self.mood = "happy"
+                return  # movement frozen next tick via the mood == "trapped" branch above
+            elif self.mood == "trapped":
+                self.mood = "happy"
 
-        # Normal wandering movement (same as earlier)
+        # Normal wandering movement
         if self.target_x is None or self.target_y is None:
             self.choose_target()
 
         dx = self.target_x - self.x()
         dy = self.target_y - self.y()
-        prev_vx, prev_vy = self.vx, self.vy
+        prev_vx = self.vx
 
-        desired_vx = max(-self.max_speed, min(self.max_speed, dx))
-        desired_vy = max(-self.max_speed, min(self.max_speed, dy))
-        self.vx += (desired_vx - self.vx) * 0.2
-        self.vy += (desired_vy - self.vy) * 0.2
+        desired_vx = max(-self.MAX_SPEED, min(self.MAX_SPEED, dx))
+        desired_vy = max(-self.MAX_SPEED, min(self.MAX_SPEED, dy))
+        self.vx += (desired_vx - self.vx) * self.STEER_SMOOTHING
+        self.vy += (desired_vy - self.vy) * self.STEER_SMOOTHING
 
-        wave = math.sin(self.fly_angle) * (2 if self.is_flying else 0)
+        wave = math.sin(self.fly_angle) * (self.FLY_WAVE_AMPLITUDE if self.is_flying else 0)
         if self.is_flying:
-            self.fly_angle += 0.12
+            self.fly_angle += self.FLY_WAVE_SPEED
 
         nx = self.x() + self.vx
         ny = self.y() + self.vy + wave
@@ -674,24 +733,24 @@ class BilloRani(QtWidgets.QWidget):
         bumped = False
         if nx < 0:
             nx = 0
-            self.vx = -self.vx * 0.6
+            self.vx = -self.vx * self.EDGE_BOUNCE_DAMPING
             bumped = True
         if nx > self.screen.width() - self.width():
             nx = self.screen.width() - self.width()
-            self.vx = -self.vx * 0.6
+            self.vx = -self.vx * self.EDGE_BOUNCE_DAMPING
             bumped = True
-        if bumped and abs(prev_vx) > 2:
+        if bumped and abs(prev_vx) > self.BUMP_MIN_PREV_SPEED:
             self.state = "bump_right" if prev_vx > 0 else "bump_left"
             self.frame_index = 0
 
         if ny < 0:
             ny = 0
-            self.vy = -self.vy * 0.5
+            self.vy = -self.vy * self.CEILING_BOUNCE_DAMPING
 
         self.move(int(nx), int(ny))
 
-        # skid detection
-        if abs(prev_vx) > 2.5 and abs(self.vx) < 0.6:
+        # skid detection: sudden loss of horizontal speed
+        if abs(prev_vx) > self.SKID_MIN_PREV_SPEED and abs(self.vx) < 0.6:
             self.start_skid(right=(prev_vx > 0))
             return
 
@@ -700,37 +759,36 @@ class BilloRani(QtWidgets.QWidget):
             return
         if self.is_flying:
             self.state = "fly_right" if self.vx >= 0 else "fly_left"
+        elif abs(self.vx) < 0.5 and abs(self.vy) < 0.5:
+            self.state = "idle_right" if self.state.endswith("right") else "idle_left"
+        elif abs(dx) >= abs(dy):
+            self.state = "run_right" if self.vx >= 0 else "run_left"
         else:
-            if abs(self.vx) < 0.5 and abs(self.vy) < 0.5:
-                self.state = "idle_right" if self.state.endswith("right") else "idle_left"
-            else:
-                if abs(dx) >= abs(dy):
-                    self.state = "run_right" if self.vx >= 0 else "run_left"
-                else:
-                    self.state = "idle_right" if self.state.endswith("right") else "idle_left"
+            self.state = "idle_right" if self.state.endswith("right") else "idle_left"
 
     # -------------------------
     # Mouse events: drag -> drop
     # -------------------------
     def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.dragging = True
-            self.drag_offset = event.pos()
-            self.trap_start = QtGui.QCursor.pos()  # start selection-trap detection
-            self.drag_timer.start(3000)  # if held for 3s -> dizzy roll
+        if event.button() != QtCore.Qt.LeftButton:
+            return
+        self.dragging = True
+        self.drag_offset = event.pos()
+        self.trap_start = QtGui.QCursor.pos()  # start selection-trap detection
+        self.drag_timer.start(self.DRAG_HOLD_DIZZY_MS)  # held for 3s -> dizzy roll
 
-            # If clicked while flying -> force fall and angry
-            if self.is_flying:
-                self.is_flying = False
-                self.falling = True
-                self.vy = 5
-                self.mood = "angry"
-                self.show_random_message(force=True, angry=True)
-            else:
-                # small jump when clicked while on ground
-                self.vy -= 6
-                self.state = "jump_right" if self.vx >= 0 else "jump_left"
-                self.mood = "happy"
+        if self.is_flying:
+            # clicked while flying -> force fall and get angry
+            self.is_flying = False
+            self.falling = True
+            self.vy = self.FLY_KNOCKDOWN_VY
+            self.mood = "angry"
+            self.show_random_message(force=True, angry=True)
+        else:
+            # small jump when clicked while on ground
+            self.vy -= self.JUMP_IMPULSE
+            self.state = "jump_right" if self.vx >= 0 else "jump_left"
+            self.mood = "happy"
 
     def mouseMoveEvent(self, event):
         if self.dragging:
@@ -738,26 +796,24 @@ class BilloRani(QtWidgets.QWidget):
             self.move(new_pos)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.dragging = False
-            # release selection trap — stop detecting
-            self.trap_start = None
-            self.drag_timer.stop()
-            # If she was angry (e.g., because clicked while flying) keep the mood until hurt
-            # otherwise minor behavior: drop and hurt sequence
-            # Start falling-to-bottom
-            self.falling = True
-            self.vy = 4.0
-            self.state = "drop_right" if self.vx >= 0 else "drop_left"
-            self.frame_index = 0
-            self.mood = "angry"
+        if event.button() != QtCore.Qt.LeftButton:
+            return
+        self.dragging = False
+        self.trap_start = None  # stop trap detection
+        self.drag_timer.stop()
+        # Drop and fall to the ground, hurt on landing
+        self.falling = True
+        self.vy = self.DROP_START_VY
+        self.state = "drop_right" if self.vx >= 0 else "drop_left"
+        self.frame_index = 0
+        self.mood = "angry"
 
     def _handle_falling(self):
         """Applies gravity while falling and triggers hurt-blink on landing."""
         if not self.falling:
             return
-        self.vy += 0.9
-        self.vx *= 0.98
+        self.vy += self.GRAVITY
+        self.vx *= self.AIR_DRAG
         nx = self.x() + self.vx
         ny = self.y() + self.vy
         self.state = "drop_right" if self.vx >= 0 else "drop_left"
@@ -769,8 +825,8 @@ class BilloRani(QtWidgets.QWidget):
             self.falling = False
             self.state = "bump_right" if self.vx >= 0 else "bump_left"
             self.frame_index = 0
-            self.vy = -6
-            self._start_hurt_blink(duration_ms=1800, interval_ms=300)
+            self.vy = self.LANDING_BOUNCE_VY
+            self._start_hurt_blink()
 
 
 # -------------------------
