@@ -1,11 +1,9 @@
 # Sprite frames
 
-`br.py` loads its animation frames from PNG files sitting **next to the
-script** (not from this `assets/` folder by default — see note below).
-The PDF this project was recovered from didn't include the actual image
-files, only the code that references them, so you'll need to supply your
-own 18x18px sprite PNGs (they get scaled up 4x at runtime) with these
-exact names:
+All 34 sprite PNGs Billo Rani needs live in this folder, and `br.py` is
+already pointed here (`self.sprites_path` resolves to `assets/` next to
+the script — or to the bundled data folder when running as the built
+`.exe`). Nothing to configure — just run the script or the exe.
 
 ```
 standl.png   standr.png
@@ -23,19 +21,9 @@ skidl.png    skidr.png
 hurt.png     hurt2.png
 ```
 
-Missing files are handled gracefully — the script prints a `(warn) missing
-<file>` line and simply skips that frame — so it will still run without
-any art, you just won't see the pet.
-
-If you'd rather keep sprites in this `assets/` folder, change this line
-near the top of `BilloRani.__init__`:
-
-```python
-self.sprites_path = os.path.dirname(os.path.abspath(__file__))
-```
-
-to:
-
-```python
-self.sprites_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-```
+Frames are loaded at their native size and scaled up 4x at runtime
+(`BilloRani.SCALE`). If you want to swap in your own art, just replace a
+file — keep the same filename and roughly the same aspect ratio (18x18px
+originals) and it'll drop right in. Missing files are handled gracefully:
+the script prints a `(warn) missing <file>` line and skips that frame
+instead of crashing.
